@@ -44,11 +44,11 @@ services:
         value: gemini-2.0-flash
       - key: EMBEDDING_MODEL
         value: text-embedding-3-small
-      # Render has no free Redis tier (any Redis instance needs a paid plan
-      # + card on file). The rate-limit dependency already fails open when
-      # Redis is unreachable (see app/core/rate_limit.py), so this is left
-      # unset rather than forcing a paid add-on. Optional: point this at a
-      # free Upstash Redis instance (upstash.com, no card required) if you
-      # want real rate limiting.
-      - key: REDIS_URL
-        sync: false
+      # No REDIS_URL here on purpose — Render has no free Redis tier (any
+      # instance needs a paid plan + card on file). app/core/config.py
+      # defaults it to localhost, and the rate-limit dependency already
+      # fails open when Redis is unreachable (see app/core/rate_limit.py),
+      # so the app runs fine without it. Optional: add a REDIS_URL env var
+      # manually in the Render dashboard pointing at a free Upstash Redis
+      # instance (upstash.com, no card required) if you want real rate
+      # limiting later.
