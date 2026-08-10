@@ -4,6 +4,7 @@
 !.env.example
 *.pem
 *.key
+credentials.md
 
 # Node / Next.js
 node_modules/

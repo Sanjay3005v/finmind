@@ -10,6 +10,64 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full system design,
 schema, and [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) for the REST/SSE
 API.
 
+## Live deployment
+
+| | |
+| --- | --- |
+| **App** | https://finmind-self.vercel.app |
+| **Backend API** | https://finmind-backend-5tk9.onrender.com/api/v1 (docs at `/docs`) |
+| **Repo** | https://github.com/Sanjay3005v/finmind |
+
+### Demo login
+
+The app is real Supabase auth — anyone can sign up their own account at
+`/signup`. A seeded demo account (one portfolio, four holdings) is also
+available if you just want to look around:
+
+```
+email:    demo@finmind.app
+password: see credentials.md (not committed — ask whoever set this up)
+```
+
+The password isn't written into this file since it's a real, working
+credential; it's saved in `credentials.md`, which is git-ignored. If you
+don't have that file, sign up a fresh account instead — it's the same app.
+
+### Hosting
+
+| Layer | Provider | Plan | Notes |
+| --- | --- | --- | --- |
+| Frontend | [Vercel](https://vercel.com) | Free (Hobby) | Auto-builds from `frontend/` on every push to `master` once Git integration is connected in the Vercel dashboard; currently deployed via `vercel --prod` from the CLI |
+| Backend | [Render](https://render.com) | Free | Deployed from [`render.yaml`](render.yaml) (Blueprint) — Docker build from `backend/Dockerfile`. Free web services spin down after ~15 min idle; the first request after that takes 30–60s to wake back up |
+| Database + Auth | [Supabase](https://supabase.com) | existing project | Postgres + pgvector + Auth, same project used for local dev |
+| Redis | — (not provisioned) | — | Render has no free Redis tier. `RATE_LIMIT` and caching fail open when Redis is unreachable (see `app/core/rate_limit.py`) — the app works correctly without it, just without real rate limiting. Add a free [Upstash](https://upstash.com) Redis URL as `REDIS_URL` in Render's dashboard if you want it |
+
+**Redeploying:**
+
+```bash
+# Frontend — from frontend/, after linking with `vercel link`
+vercel --prod
+
+# Backend — push to master; if Render's GitHub auto-deploy is connected it
+# redeploys automatically, otherwise trigger a manual deploy from the
+# Render dashboard (or "Clear build cache & deploy" after a Dockerfile change)
+git push
+```
+
+**Environment variables set directly in each provider's dashboard** (never
+committed): Vercel holds `NEXT_PUBLIC_SUPABASE_URL` /
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` / `NEXT_PUBLIC_API_BASE_URL`; Render holds
+`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+`SUPABASE_JWT_SECRET`, `CORS_ORIGINS`, and the three LLM provider keys
+(`OPENAI_API_KEY` / `GROQ_API_KEY` / `GEMINI_API_KEY`).
+
+### Known gap
+
+The **Reports** screen (`/reports`) has frontend UI but no backend route —
+`generateReport`/`getReportJob` in `lib/api/client.ts` call
+`/api/v1/reports/*`, which doesn't exist yet. Generating a report will show
+a "Not Found" error until that endpoint is built.
+
 ## Stack
 
 - **Frontend:** Next.js (App Router) + TypeScript + Tailwind + shadcn/ui
