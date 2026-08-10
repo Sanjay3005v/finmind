@@ -2,7 +2,7 @@ services:
   - type: web
     name: finmind-backend
     runtime: docker
-    plan: starter
+    plan: free
     region: singapore
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
@@ -44,14 +44,11 @@ services:
         value: gemini-2.0-flash
       - key: EMBEDDING_MODEL
         value: text-embedding-3-small
+      # Render has no free Redis tier (any Redis instance needs a paid plan
+      # + card on file). The rate-limit dependency already fails open when
+      # Redis is unreachable (see app/core/rate_limit.py), so this is left
+      # unset rather than forcing a paid add-on. Optional: point this at a
+      # free Upstash Redis instance (upstash.com, no card required) if you
+      # want real rate limiting.
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: finmind-redis
-          property: connectionString
-
-  - type: redis
-    name: finmind-redis
-    plan: starter
-    region: singapore
-    ipAllowList: []
+        sync: false
