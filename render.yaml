@@ -1,0 +1,57 @@
+services:
+  - type: web
+    name: finmind-backend
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "60"
+      # Generated automatically by Render — never entered by hand.
+      - key: APP_SECRET_KEY
+        generateValue: true
+      # Everything below is a real secret/connection string — set these
+      # directly in the Render dashboard (Environment tab) after the first
+      # deploy, never committed to this file or pasted anywhere else.
+      - key: CORS_ORIGINS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4.1-mini
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+      - key: EMBEDDING_MODEL
+        value: text-embedding-3-small
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: finmind-redis
+          property: connectionString
+
+  - type: redis
+    name: finmind-redis
+    plan: starter
+    region: singapore
+    ipAllowList: []
