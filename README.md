@@ -61,12 +61,22 @@ committed): Vercel holds `NEXT_PUBLIC_SUPABASE_URL` /
 `SUPABASE_JWT_SECRET`, `CORS_ORIGINS`, and the three LLM provider keys
 (`OPENAI_API_KEY` / `GROQ_API_KEY` / `GEMINI_API_KEY`).
 
-### Known gap
+### Known gaps
 
-The **Reports** screen (`/reports`) has frontend UI but no backend route —
-`generateReport`/`getReportJob` in `lib/api/client.ts` call
-`/api/v1/reports/*`, which doesn't exist yet. Generating a report will show
-a "Not Found" error until that endpoint is built.
+- The **Reports** screen (`/reports`) has frontend UI but no backend route —
+  `generateReport`/`getReportJob` in `lib/api/client.ts` call
+  `/api/v1/reports/*`, which doesn't exist yet. Generating a report will show
+  a "Not Found" error until that endpoint is built.
+- **Yahoo Finance occasionally rate-limits Render's IP** (`MARKET_DATA_UNAVAILABLE`,
+  HTTP 429 upstream) more aggressively than a residential IP — the price
+  history / candlestick chart degrades to an empty state when this happens
+  rather than showing stale or fake data; retrying after a minute usually
+  works. Everything that doesn't depend on live market data (holdings,
+  allocation, P&L, movers, chat) is unaffected.
+- **Render's free tier spins down after ~15 minutes idle.** The first
+  request after that can take 30–60s (and, rarely, error once) while the
+  instance wakes up — this already resolved itself on retry during testing
+  and isn't a bug in the app.
 
 ## Stack
 
