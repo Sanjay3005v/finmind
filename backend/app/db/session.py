@@ -31,7 +31,20 @@ def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
         settings = get_settings()
-        _engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True, future=True)
+        # Supabase's Session pooler caps a project at 15 concurrent
+        # connections total, shared across every client (this app, any
+        # migration/admin script, etc). SQLAlchemy's un-capped default
+        # (pool_size=5 + max_overflow=10 = 15) can exhaust that budget by
+        # itself under bursty traffic, locking out anything else — including
+        # `alembic` — until connections are recycled. Stay well under it.
+        _engine = create_async_engine(
+            settings.DATABASE_URL,
+            pool_pre_ping=True,
+            pool_size=3,
+            max_overflow=2,
+            pool_recycle=300,
+            future=True,
+        )
     return _engine
 
 

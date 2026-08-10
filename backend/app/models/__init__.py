@@ -19,6 +19,7 @@ from app.models.agent_message import AgentMessage
 from app.models.trade_approval import TradeApproval
 from app.models.risk_assessment import RiskAssessment
 from app.models.audit_log import AuditLog
+from app.models.report_job import ReportJob
 
 __all__ = [
     "Profile",
@@ -35,4 +36,5 @@ __all__ = [
     "TradeApproval",
     "RiskAssessment",
     "AuditLog",
+    "ReportJob",
 ]
