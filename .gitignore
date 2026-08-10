@@ -1,0 +1,39 @@
+# Secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/next-env.d.ts
+*.tsbuildinfo
+npm-debug.log*
+
+# Python
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.venv/
+backend/venv/
+backend/*.egg-info/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/htmlcov/
+backend/.coverage
+
+# Docker
+infra/volumes/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log

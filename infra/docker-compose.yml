@@ -1,0 +1,74 @@
+name: finmind
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+    command: celery -A app.workers.celery_app worker --loglevel=info
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../frontend/.env.local
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+
+volumes:
+  redis_data:
+
+# Postgres/pgvector is hosted on Supabase (see docs/ARCHITECTURE.md §9) —
+# no local postgres service is defined here. If you need a fully offline
+# dev DB, add a `postgres:16` service with the `pgvector/pgvector` image
+# and point DATABASE_URL at it instead.
