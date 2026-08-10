@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
+import structlog
 from fastapi import APIRouter, Depends, Query
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy import select
@@ -28,12 +29,66 @@ from app.core.security import get_current_user_id
 from app.db.session import get_db
 from app.models.agent_session import AgentSession
 from app.models.broker_connection import BrokerConnection
+from app.models.holding import Holding
 from app.models.trade_approval import TradeApproval
 from app.models.transaction import Transaction
 from app.schemas.trade_approval import TradeApprovalResponse, TradeDecisionRequest
 from app.services import agent_service
 
+logger = structlog.get_logger(__name__)
+
 router = APIRouter(prefix="/trade-approvals", tags=["trade-approvals"], dependencies=[Depends(rate_limit_dependency)])
+
+
+async def _apply_fill_to_holdings(db: AsyncSession, portfolio_id, order) -> None:
+    """Executing a trade approval only ever wrote a `Transaction` row (for
+    the equity curve) — it never touched `holdings`, so an approved trade
+    never showed up as a position change anywhere in the portfolio UI.
+    Applies the same weighted-average-cost accounting a broker sync would."""
+    result = await db.execute(
+        select(Holding).where(
+            Holding.portfolio_id == portfolio_id,
+            Holding.symbol == order.symbol,
+            Holding.exchange == order.exchange,
+        )
+    )
+    holding = result.scalar_one_or_none()
+    price = float(order.price or 0)
+    qty = float(order.quantity)
+
+    if order.side == "buy":
+        if holding is None:
+            db.add(
+                Holding(
+                    portfolio_id=portfolio_id,
+                    symbol=order.symbol,
+                    exchange=order.exchange,
+                    quantity=qty,
+                    avg_price=price,
+                    current_price=price,
+                )
+            )
+        else:
+            existing_qty = float(holding.quantity)
+            new_qty = existing_qty + qty
+            holding.avg_price = (existing_qty * float(holding.avg_price) + qty * price) / new_qty
+            holding.quantity = new_qty
+            holding.current_price = price
+    else:  # sell
+        if holding is None:
+            logger.warning(
+                "trade_approval_sell_with_no_holding",
+                portfolio_id=str(portfolio_id),
+                symbol=order.symbol,
+                exchange=order.exchange,
+            )
+            return
+        new_qty = float(holding.quantity) - qty
+        if new_qty <= 0:
+            await db.delete(holding)
+        else:
+            holding.quantity = new_qty
+            holding.current_price = price
 
 
 @router.get("", response_model=list[TradeApprovalResponse])
@@ -114,6 +169,7 @@ async def decide_trade_approval(
                         broker_order_id=order.broker_order_id,
                     )
                 )
+                await _apply_fill_to_holdings(db, session_row.portfolio_id, order)
     else:
         approval.status = "rejected"
         if payload.note:

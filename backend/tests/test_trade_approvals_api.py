@@ -9,8 +9,10 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from sqlalchemy import select
 
 import app.agents.graph as graph_mod
+from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from tests._agent_test_helpers import fake_chat_model, fake_structured_model
 from tests.conftest import TEST_USER_ID
@@ -32,11 +34,12 @@ def _parse_sse(text: str) -> list[tuple[str, str]]:
     return events
 
 
-async def _propose_trade(client, db_session, monkeypatch, symbol="RELIANCE", side="buy", quantity=5):
-    portfolio = Portfolio(user_id=TEST_USER_ID, name="Test Portfolio")
-    db_session.add(portfolio)
-    await db_session.flush()
-    await db_session.commit()
+async def _propose_trade(client, db_session, monkeypatch, symbol="RELIANCE", side="buy", quantity=5, portfolio=None):
+    if portfolio is None:
+        portfolio = Portfolio(user_id=TEST_USER_ID, name="Test Portfolio")
+        db_session.add(portfolio)
+        await db_session.flush()
+        await db_session.commit()
 
     proposal = graph_mod.TradeProposal(symbol=symbol, side=side, quantity=quantity, order_type="market", reasoning="test")
     monkeypatch.setattr(
@@ -53,12 +56,12 @@ async def _propose_trade(client, db_session, monkeypatch, symbol="RELIANCE", sid
     import json
 
     trade_approval_id = json.loads(interrupt_data)["trade_approval_id"]
-    return session_id, trade_approval_id
+    return session_id, trade_approval_id, portfolio
 
 
 @pytest.mark.asyncio
 async def test_approve_decision_executes_in_paper_mode_and_records_order(client, db_session, monkeypatch):
-    session_id, trade_approval_id = await _propose_trade(client, db_session, monkeypatch)
+    session_id, trade_approval_id, _portfolio = await _propose_trade(client, db_session, monkeypatch)
     monkeypatch.setattr(graph_mod, "get_chat_model", fake_chat_model("Acknowledged."))
 
     resp = client.post(f"/api/v1/trade-approvals/{trade_approval_id}/decision", json={"decision": "approve"})
@@ -79,7 +82,7 @@ async def test_approve_decision_executes_in_paper_mode_and_records_order(client,
 
 @pytest.mark.asyncio
 async def test_reject_decision_never_touches_a_broker(client, db_session, monkeypatch):
-    session_id, trade_approval_id = await _propose_trade(client, db_session, monkeypatch)
+    session_id, trade_approval_id, _portfolio = await _propose_trade(client, db_session, monkeypatch)
     monkeypatch.setattr(graph_mod, "get_chat_model", fake_chat_model("Understood."))
 
     resp = client.post(
@@ -94,7 +97,7 @@ async def test_reject_decision_never_touches_a_broker(client, db_session, monkey
 
 @pytest.mark.asyncio
 async def test_deciding_an_already_decided_approval_returns_400(client, db_session, monkeypatch):
-    _, trade_approval_id = await _propose_trade(client, db_session, monkeypatch)
+    _, trade_approval_id, _portfolio = await _propose_trade(client, db_session, monkeypatch)
     monkeypatch.setattr(graph_mod, "get_chat_model", fake_chat_model("Acknowledged."))
 
     first = client.post(f"/api/v1/trade-approvals/{trade_approval_id}/decision", json={"decision": "approve"})
@@ -107,7 +110,7 @@ async def test_deciding_an_already_decided_approval_returns_400(client, db_sessi
 
 @pytest.mark.asyncio
 async def test_get_and_list_trade_approvals(client, db_session, monkeypatch):
-    _, trade_approval_id = await _propose_trade(client, db_session, monkeypatch)
+    _, trade_approval_id, _portfolio = await _propose_trade(client, db_session, monkeypatch)
 
     get_resp = client.get(f"/api/v1/trade-approvals/{trade_approval_id}")
     assert get_resp.status_code == 200
@@ -116,6 +119,71 @@ async def test_get_and_list_trade_approvals(client, db_session, monkeypatch):
     list_resp = client.get("/api/v1/trade-approvals", params={"status": "pending"})
     assert list_resp.status_code == 200
     assert any(a["id"] == trade_approval_id for a in list_resp.json())
+
+
+@pytest.mark.asyncio
+async def test_approving_a_buy_creates_a_new_holding(client, db_session, monkeypatch):
+    session_id, trade_approval_id, portfolio = await _propose_trade(
+        client, db_session, monkeypatch, symbol="RELIANCE", side="buy", quantity=5
+    )
+    monkeypatch.setattr(graph_mod, "get_chat_model", fake_chat_model("Acknowledged."))
+
+    resp = client.post(f"/api/v1/trade-approvals/{trade_approval_id}/decision", json={"decision": "approve"})
+    assert resp.status_code == 200
+
+    result = await db_session.execute(select(Holding).where(Holding.portfolio_id == portfolio.id))
+    holding = result.scalar_one()
+    assert holding.symbol == "RELIANCE"
+    assert float(holding.quantity) == 5
+    assert float(holding.avg_price) == pytest.approx(2945.60)
+
+
+@pytest.mark.asyncio
+async def test_approving_a_buy_averages_into_an_existing_holding(client, db_session, monkeypatch):
+    portfolio = Portfolio(user_id=TEST_USER_ID, name="Test Portfolio")
+    db_session.add(portfolio)
+    await db_session.flush()
+    db_session.add(
+        Holding(portfolio_id=portfolio.id, symbol="RELIANCE", exchange="NSE", quantity=10, avg_price=2000.0)
+    )
+    await db_session.commit()
+
+    _, trade_approval_id, _ = await _propose_trade(
+        client, db_session, monkeypatch, symbol="RELIANCE", side="buy", quantity=5, portfolio=portfolio
+    )
+    monkeypatch.setattr(graph_mod, "get_chat_model", fake_chat_model("Acknowledged."))
+
+    resp = client.post(f"/api/v1/trade-approvals/{trade_approval_id}/decision", json={"decision": "approve"})
+    assert resp.status_code == 200
+
+    result = await db_session.execute(select(Holding).where(Holding.portfolio_id == portfolio.id))
+    holding = result.scalar_one()
+    assert float(holding.quantity) == 15  # 10 existing + 5 bought
+    # weighted average: (10*2000 + 5*2945.60) / 15
+    expected_avg = (10 * 2000.0 + 5 * 2945.60) / 15
+    assert float(holding.avg_price) == pytest.approx(expected_avg)
+
+
+@pytest.mark.asyncio
+async def test_approving_a_sell_that_closes_a_position_removes_the_holding(client, db_session, monkeypatch):
+    portfolio = Portfolio(user_id=TEST_USER_ID, name="Test Portfolio")
+    db_session.add(portfolio)
+    await db_session.flush()
+    db_session.add(
+        Holding(portfolio_id=portfolio.id, symbol="RELIANCE", exchange="NSE", quantity=5, avg_price=2000.0)
+    )
+    await db_session.commit()
+
+    _, trade_approval_id, _ = await _propose_trade(
+        client, db_session, monkeypatch, symbol="RELIANCE", side="sell", quantity=5, portfolio=portfolio
+    )
+    monkeypatch.setattr(graph_mod, "get_chat_model", fake_chat_model("Acknowledged."))
+
+    resp = client.post(f"/api/v1/trade-approvals/{trade_approval_id}/decision", json={"decision": "approve"})
+    assert resp.status_code == 200
+
+    result = await db_session.execute(select(Holding).where(Holding.portfolio_id == portfolio.id))
+    assert result.scalar_one_or_none() is None
 
 
 def test_trade_approval_owned_by_another_user_is_not_visible(client):
