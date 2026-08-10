@@ -132,10 +132,12 @@ async def download_report(job_id: UUID, token: str, db: AsyncSession = Depends(g
     currency = portfolio.base_currency
     generated_at = datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
 
+    asset_class_market_value = allocation.by_asset_class["market_value"]
+    asset_class_percentage = allocation.by_asset_class["percentage"]
     asset_class_rows = "".join(
         f"<tr><td>{label}</td><td>{_fmt_money(value, currency)}</td>"
-        f"<td>{allocation.by_asset_class.percentage.get(label, 0):.1f}%</td></tr>"
-        for label, value in allocation.by_asset_class.market_value.items()
+        f"<td>{asset_class_percentage.get(label, 0):.1f}%</td></tr>"
+        for label, value in asset_class_market_value.items()
     )
     holding_rows = "".join(
         f"<tr><td>{h.symbol}</td><td>{h.exchange}</td><td>{h.asset_class or '—'}</td>"
