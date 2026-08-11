@@ -42,12 +42,42 @@ class _FakeResponse:
         return self._payload
 
 
+async def _no_op_sleep(*_args, **_kwargs) -> None:
+    return None
+
+
 def _patch_get(monkeypatch, response_by_ticker):
     async def _fake_get(self, url, params=None, headers=None):
         ticker = url.rsplit("/", 1)[-1]
         return response_by_ticker[ticker]
 
     monkeypatch.setattr("httpx.AsyncClient.get", _fake_get)
+
+
+@pytest.mark.asyncio
+async def test_get_quote_retries_on_429_then_succeeds(monkeypatch):
+    monkeypatch.setattr(yahoo_finance.asyncio, "sleep", _no_op_sleep)  # skip real backoff delay
+    calls = {"count": 0}
+
+    async def _fake_get(self, url, params=None, headers=None):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            return _FakeResponse(429, {})
+        return _FakeResponse(200, _chart_payload(price=500.0))
+
+    monkeypatch.setattr("httpx.AsyncClient.get", _fake_get)
+    quote = await get_quote("RELIANCE", "NSE")
+    assert quote.price == 500.0
+    assert calls["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_get_quote_gives_up_after_max_retries_on_429(monkeypatch):
+    monkeypatch.setattr(yahoo_finance.asyncio, "sleep", _no_op_sleep)
+    _patch_get(monkeypatch, {"RELIANCE.NS": _FakeResponse(429, {})})
+    with pytest.raises(AppError) as exc_info:
+        await get_quote("RELIANCE", "NSE")
+    assert exc_info.value.code == "MARKET_DATA_UNAVAILABLE"
 
 
 def test_to_yahoo_ticker_maps_commodities_to_real_nse_etfs():

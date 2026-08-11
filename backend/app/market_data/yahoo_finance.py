@@ -12,6 +12,7 @@ than returning a guessed/interpolated value.
 from __future__ import annotations
 
 import asyncio
+import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -73,19 +74,40 @@ class PricePoint:
     volume: Optional[float] = None
 
 
-async def _fetch_chart(ticker: str, range_: str, interval: str) -> dict:
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.get(
-                _CHART_URL.format(ticker=ticker),
-                params={"range": range_, "interval": interval},
-                headers=_HEADERS,
-            )
-    except httpx.HTTPError as exc:
-        raise AppError(
-            code="MARKET_DATA_UNAVAILABLE", message=f"Could not reach the market data provider: {exc}", status_code=502
-        ) from exc
+_RATE_LIMIT_RETRIES = 3
+_RATE_LIMIT_BACKOFF_SECONDS = 1.5
 
+
+async def _fetch_chart(ticker: str, range_: str, interval: str) -> dict:
+    response: Optional[httpx.Response] = None
+    for attempt in range(_RATE_LIMIT_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                response = await client.get(
+                    _CHART_URL.format(ticker=ticker),
+                    params={"range": range_, "interval": interval},
+                    headers=_HEADERS,
+                )
+        except httpx.HTTPError as exc:
+            raise AppError(
+                code="MARKET_DATA_UNAVAILABLE", message=f"Could not reach the market data provider: {exc}", status_code=502
+            ) from exc
+
+        # Yahoo's keyless endpoint rate-limits per source IP in short bursts
+        # (seen in practice from Render's shared IPs) — this is usually gone
+        # within a couple seconds, so a brief retry recovers it rather than
+        # failing a refresh outright on a transient throttle.
+        if response.status_code == 429 and attempt < _RATE_LIMIT_RETRIES:
+            logger.warning("market_data_rate_limited_retrying", ticker=ticker, attempt=attempt + 1)
+            # Jittered so concurrent multi-symbol refreshes (get_quotes fires
+            # them all at once) don't retry in lockstep and re-trigger the
+            # same burst limit together.
+            delay = _RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1) + random.uniform(0, 1.0)
+            await asyncio.sleep(delay)
+            continue
+        break
+
+    assert response is not None
     if response.status_code == 404:
         raise AppError(code="SYMBOL_NOT_FOUND", message=f"No market data found for '{ticker}'.", status_code=404)
     if response.status_code != 200:
